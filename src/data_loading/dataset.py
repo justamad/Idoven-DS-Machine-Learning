@@ -6,10 +6,8 @@ import ast
 from os.path import join
 from typing import List, Dict, Tuple
 
-POSSIBLE_GROUND_TRUTH_LABELS = ["NORM", "MI", "STTC", "HYP", "CD"]
 
-
-def load_physionet_dataset(path: str, sampling_rate: int = 100, max_idx: int = 100):
+def load_physionet_dataset(path: str):
     Y = pd.read_csv(join(path, 'ptbxl_database.csv'), index_col='ecg_id')
     Y.scp_codes = Y.scp_codes.apply(lambda x: ast.literal_eval(x))
 
@@ -30,8 +28,6 @@ def aggregate_diagnostic(y_dic: Dict, agg_df: pd.DataFrame) -> List:
 
 
 def prepare_training_data(path: str, Y: pd.DataFrame, sampling_rate=100) -> Tuple[np.ndarray, pd.DataFrame]:
-    Y["ground_truth"] = Y.diagnostic_superclass.apply(calculate_one_hot_encoding_per_sample)
-    # Y = Y.iloc[:max_idx]
     X = load_raw_ecg_data(Y, sampling_rate, path)
     return X, Y
 
@@ -45,10 +41,18 @@ def load_raw_ecg_data(df: pd.DataFrame, sampling_rate: int, path: str) -> np.nda
     return data
 
 
-def calculate_one_hot_encoding_per_sample(sample: List) -> np.ndarray:
+def prepare_ground_truth_data(df: pd.DataFrame):
+    df["ground_truth"] = df[df['diagnostic_superclass'].apply(calculate_one_hot_encoding_per_sample)]
+    return df
+
+
+def calculate_one_hot_encoding_per_sample(sample: List) -> List[int]:
     assert sample != [], f"Sample is empty: {sample}"
-    one_hot = np.zeros(len(POSSIBLE_GROUND_TRUTH_LABELS), dtype=int)
-    for value in sample:
-        if value in POSSIBLE_GROUND_TRUTH_LABELS:
-            one_hot[POSSIBLE_GROUND_TRUTH_LABELS.index(value)] = 1
-    return one_hot
+    if sample == ["NORM"]:
+        return [0]
+    return [1]
+
+
+if __name__ == '__main__':
+    df = load_physionet_dataset("../../data/physionet.org/files/ptb-xl/1.0.2/")
+    print(df)

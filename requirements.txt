@@ -8,3 +8,4 @@ scikit-learn
 hyperopt
 torch
 seaborn
+scikit-optimize
