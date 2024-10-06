@@ -163,4 +163,3 @@ cython_debug/
 
 data/physionet.org
 data/processed
-param_search/
