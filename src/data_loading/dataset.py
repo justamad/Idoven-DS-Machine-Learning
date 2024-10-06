@@ -42,7 +42,7 @@ def load_raw_ecg_data(df: pd.DataFrame, sampling_rate: int, path: str) -> np.nda
 
 
 def prepare_ground_truth_data(df: pd.DataFrame):
-    df["ground_truth"] = df[df['diagnostic_superclass'].apply(calculate_one_hot_encoding_per_sample)]
+    df["ground_truth"] = df['diagnostic_superclass'].apply(calculate_one_hot_encoding_per_sample)
     return df
 
 
