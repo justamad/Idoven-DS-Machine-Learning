@@ -9,3 +9,4 @@ hyperopt
 torch
 seaborn
 scikit-optimize
+tqdm

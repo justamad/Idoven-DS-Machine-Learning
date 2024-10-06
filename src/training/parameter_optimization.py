@@ -4,21 +4,18 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import pickle
-import matplotlib.pyplot as plt
 import os
-import json
 
-from typing import List, Dict
+from tqdm import tqdm
+from typing import List
 from torch.utils.data import DataLoader
 from os.path import join
 from sklearn.model_selection import KFold
-from sklearn.metrics import f1_score, roc_auc_score
 from skopt import gp_minimize
 from skopt.space import Real, Integer, Categorical
 
 from src.models import CNNModel
 from src.training import ECGDataset
-from src.data_loading import prepare_ground_truth_data
 
 
 class HyperparameterSearch:
@@ -33,6 +30,7 @@ class HyperparameterSearch:
         win_size: int,
         stride: int,
         epochs: int,
+        folds: int,
     ):
         self._X_train = X_train
         self._y_train = y_train
@@ -46,6 +44,7 @@ class HyperparameterSearch:
         self._win_size = win_size
         self._stride = stride
         self._epochs = epochs
+        self._folds = folds
 
     def perform_search(self, n_calls: int):
         search_space = [
@@ -65,14 +64,14 @@ class HyperparameterSearch:
 
     def objective(self, params: List):
         print(f"Training with params: {params}")
-        loss = self.train_model_with_k_fold(params, n_splits=3)
+        loss = self.train_model_with_k_fold(params)
         return loss
 
-    def train_model_with_k_fold(self, params: List, n_splits: int=3):
+    def train_model_with_k_fold(self, params: List):
         batch_size, learning_rate, dropout_rate, conv_filters = params
         batch_size = int(batch_size)
 
-        kf = KFold(n_splits=n_splits)
+        kf = KFold(n_splits=self._folds)
         val_losses = []
 
         for train_idx, val_idx in kf.split(self._X_train):
@@ -102,16 +101,24 @@ class HyperparameterSearch:
             model.train()
             for epoch in range(self._epochs):
                 running_loss = 0.0
-                for data, labels in train_loader:
-                    data = data.permute(0, 2, 1).to(self._device)  # Change shape to (batch_size, channels, time_steps)
-                    labels = labels.to(self._device)
 
-                    optimizer.zero_grad()
-                    outputs = model(data)
-                    loss = criterion(outputs, labels)
-                    loss.backward()
-                    optimizer.step()
-                    running_loss += loss.item()
+                # Use tqdm to create a progress bar for the training loop
+                with tqdm(total=len(train_loader), desc=f'Epoch {epoch + 1}/{self._epochs}', unit='batch') as pbar:
+                    for batch_idx, (data, labels) in enumerate(train_loader):
+                        data = data.permute(0, 2, 1).to(self._device)  # Change shape to (batch_size, channels, time_steps)
+                        labels = labels.to(self._device)
+
+                        optimizer.zero_grad()
+                        outputs = model(data)
+                        loss = criterion(outputs, labels)
+                        loss.backward()
+                        optimizer.step()
+
+                        running_loss += loss.item()
+
+                        # Update the progress bar with the current loss
+                        pbar.set_postfix(loss=running_loss / (batch_idx + 1))
+                        pbar.update(1)  # Move the progress bar forward by 1 batch
 
                 # Calculate average loss for the epoch
                 epoch_loss = running_loss / len(train_loader)
@@ -165,20 +172,26 @@ class HyperparameterSearch:
         train_loss_history = []
         model.train()
         for epoch in range(self._epochs):
-            running_loss = 0.0
-            for data, labels in train_loader:
-                data = data.permute(0, 2, 1).to(self._device)  # Change shape to (batch_size, channels, time_steps)
-                labels = labels.to(self._device)
+            with tqdm(total=len(train_loader), desc=f'Epoch {epoch + 1}/{self._epochs}', unit='batch') as pbar:
+                running_loss = 0.0
 
-                optimizer.zero_grad()
-                outputs = model(data)
-                loss = criterion(outputs, labels)
-                loss.backward()
-                optimizer.step()
-                running_loss += loss.item()
+                for batch_idx, (data, labels) in enumerate(train_loader):
+                    data = data.permute(0, 2, 1).to(self._device)  # Change shape to (batch_size, channels, time_steps)
+                    labels = labels.to(self._device)
 
-            epoch_loss = running_loss / len(train_loader)
-            train_loss_history.append(epoch_loss)  # Save epoch loss
+                    optimizer.zero_grad()
+                    outputs = model(data)
+                    loss = criterion(outputs, labels)
+                    loss.backward()
+                    optimizer.step()
+                    running_loss += loss.item()
+
+                    # Update the progress bar with the current loss
+                    pbar.set_postfix(loss=running_loss / (batch_idx + 1))
+                    pbar.update(1)  # Move the progress bar forward by 1 batch
+
+                epoch_loss = running_loss / len(train_loader)
+                train_loss_history.append(epoch_loss)  # Save epoch loss
 
         print(f"Train loss: {train_loss_history[-1]}")
 
@@ -213,9 +226,7 @@ class HyperparameterSearch:
 if __name__ == '__main__':
     X = np.load("../../data/processed/X.npy")
     Y = pd.read_csv("../../data/processed/y.csv")
-    Y['diagnostic_superclass'] = Y['diagnostic_superclass'].apply(json.loads)
-
-    Y = prepare_ground_truth_data(Y)
+    Y["ground_truth"] = Y["ground_truth"].apply(lambda x: [x])  # Wrap labels into list for PyTorch Tensors
 
     test_fold = 10
     X_train = X[np.where(Y.strat_fold != test_fold)]
@@ -226,15 +237,13 @@ if __name__ == '__main__':
     model_path = "../../param_search"
 
     win_size = 100
-    stride = 100
+    stride = 200
     epochs = 1
-    opt_search = HyperparameterSearch(X_train, y_train, X_test, y_test, model_path, win_size, stride, epochs)
+    folds = 2
+    opt_search = HyperparameterSearch(X_train, y_train, X_test, y_test, model_path, win_size, stride, epochs, folds)
     # opt_search.perform_search(n_calls=10)
 
     with open(join(model_path, "best_params.pkl"), 'rb') as file:
         loaded_results = pickle.load(file)
 
-    print(loaded_results)
     predictions, labels = opt_search.evaluate_model(loaded_results)
-    print(predictions)
-    print(labels)
